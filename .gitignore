@@ -129,6 +129,6 @@ dmypy.json
 .pyre/
 
 # for this project
-.pth
-.mat
-.csv
+*.pth
+*.mat
+*.csv
