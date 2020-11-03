@@ -5,12 +5,12 @@ from torchvision.transforms import transforms
 
 
 class CalibrationData(dataset.Dataset):
-    def __init__(self, folder):
+    def __init__(self, folder, im_size=(128, 128)):
         super(CalibrationData, self).__init__()
         self.files = []
         for item in os.listdir(folder):
             self.files.append(os.path.join(folder, item))
-        self.trans = get_calibration_trans()
+        self.trans = get_calibration_trans(im_size)
 
     def __len__(self):
         return len(self.files)

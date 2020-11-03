@@ -134,3 +134,5 @@ dmypy.json
 *.csv
 *.m
 .idea/
+model/
+dev.py 

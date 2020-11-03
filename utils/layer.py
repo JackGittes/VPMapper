@@ -49,15 +49,24 @@ class QConv2d(nn.Module):
             q_weight = self.weight
             q_x = x
         if self.bias is not None:
-            return func.conv2d(q_x, q_weight, bias=None,
-                               stride=self.stride,
-                               padding=self.padding,
-                               groups=self.groups)
-        else:
             return func.conv2d(q_x, q_weight, bias=self.bias,
                                stride=self.stride,
                                padding=self.padding,
                                groups=self.groups)
+        else:
+            return func.conv2d(q_x, q_weight, bias=None,
+                               stride=self.stride,
+                               padding=self.padding,
+                               groups=self.groups)
+
+
+class Reshape(nn.Module):
+    def __init__(self, shape):
+        super(Reshape, self).__init__()
+        self.shape = shape
+
+    def forward(self, x):
+        return x.view(*self.shape)
 
 
 def search_replace_convolution2d(model, bit_width):
@@ -80,8 +89,10 @@ def search_replace_convolution2d(model, bit_width):
                 _layer.bias.data = child.bias.data
             else:
                 _layer = nn.Conv2d(in_ch, out_ch, 1, 1, bias=False)
-            _layer.weight.data = child.weight.data
-            setattr(model, child_name, QConv2d(_layer, bit_width))
+            _layer.weight.data = child.weight.data.view(out_ch, in_ch, 1, 1)
+            composed_layer = nn.Sequential(Reshape((-1, in_ch, 1, 1)),
+                                           QConv2d(_layer, bit_width))
+            setattr(model, child_name, composed_layer)
         else:
             """ Recursively search the tree from left child to right child. """
             search_replace_convolution2d(child, bit_width)

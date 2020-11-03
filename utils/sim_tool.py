@@ -32,10 +32,15 @@ class Simulation(object):
         pre_code[0] += main_func_def()
 
         pre_code[0] += arithmetic(self.mac_width)
+        pre_code[0] += input_normalize()
+
         generate(model, pre_code, [1])
-        pre_code[0] += "\nend\n"
+        pre_code[0] += "\n\tstat={};\n" \
+                       "end\n"
 
         pre_code[0] += aux_func_def(self.bit_width)
+
+        pre_code[0] = pre_code[0].replace("\t", "    ")
         with open('./template.m', 'w') as fp:
             fp.writelines(pre_code[0])
 
@@ -43,52 +48,69 @@ class Simulation(object):
         print("=============================================================")
 
 
-def hint():
+def hint()->str:
     info = "%{ \n" \
-           "\tThis is an AUTO-GENERATED network template. \n" \
-           "\tThere is no guarantee for correctness. To start a \n" \
-           "\tsimulation, check the topology with original network and \n" \
-           "\tadd necessary operations in the below code.\n" \
+           "\t-------- THIS IS AN AUTO-GENERATED NETWORK TEMPLATE --------\n" \
+           "\tNOTE: There is no guarantee for correctness. To start a \n" \
+           "\tsimulation, check the topology with the original network and \n" \
+           "\tadd necessary operations in the below code.\n\n" \
+           "\t(1). The shortcut connection is ignored in conversion.\n" \
+           "\t(2). Numeric type cast may be incorrect.\n" \
+           "\t------------------------------------------------------------ \n" \
            "%} \n"
     return info
 
 
-def author_info(author_name):
-    info = "% Author:  {}\n".format(author_name)
+def author_info(author_name)->str:
+    info = "% Author: {}\n".format(author_name)
     return info
 
 
-def time_stamp():
+def time_stamp()->str:
     from datetime import datetime
-    info = "% Date:\t" + datetime.today().strftime('%Y-%m-%d') + "\n"
+    info = "% Date: " + datetime.today().strftime('%Y-%m-%d') + "\n"
     return info
 
 
-def main_func_def():
-    res = "\nfunction im = Network(im, nn, net)\n"
+def main_func_def()->str:
+    res = "\nfunction [im, stat] = template(nn, net, im)\n"
     return res
 
 
-def aux_func_def(bit_width):
-    max_v = 2 ** (bit_width-1) - 1
-    min_v = - 2 ** (bit_width - 1)
+def aux_func_def(bit_width)->str:
+    max_v_b = 2 ** (bit_width-1) - 1
+    min_v_b = - 2 ** (bit_width - 1)
+
+    max_v_bb = 2 ** (2*bit_width-1) - 1
+    min_v_bb = - 2 ** (2*bit_width - 1)
     res = "\nfunction res = cast_int(im, mul, sft) \n" \
-          "\t im = im * mul;\n" \
-          "\t im = bitshift(im, -sft);\n" \
-          "\t im(im > {}) = {};\n" \
-          "\t im(im < {}) = {};\n" \
-          "\t res = im;\n" \
-          "end\n".format(max_v, max_v, min_v, min_v)
+          "\tim(im < {}) = {};\n" \
+          "\tim(im > {}) = {};\n" \
+          "\tim = im * mul;\n" \
+          "\tim = bitshift(im, -sft);\n" \
+          "\tim(im > {}) = {};\n" \
+          "\tim(im < {}) = {};\n" \
+          "\tres = im;\n" \
+          "end\n".format(min_v_bb, min_v_bb, max_v_bb, max_v_bb,
+                         max_v_b, max_v_b, min_v_b, min_v_b)
     return res
 
 
-def arithmetic(mac_width):
+def arithmetic(mac_width)->str:
     res = "\tf = fimath('CastBeforeSum',0, 'OverflowMode', 'Saturate', 'RoundMode', 'floor', ... \n\t" \
           "'ProductMode', 'SpecifyPrecision', 'SumMode', 'SpecifyPrecision', 'ProductWordLength', {}, " \
           "... \n\t 'ProductFractionLength', 0, 'SumWordLength', {}, 'SumFractionLength', 0); \n\t" \
           "t = numerictype('WordLength', {}, 'FractionLength', 0); \n".format(mac_width,
-                                                                                mac_width,
-                                                                                mac_width)
+                                                                              mac_width,
+                                                                              mac_width)
+    return res
+
+
+def input_normalize()->str:
+    res = "\n% --- WARNING: Input is adjusted to [-128, 127].\n" \
+          "% --- If your pre-processing is not like this,\n" \
+          "% --- change it to what you used.\n" \
+          "\tim = fi(single(im)-128, t, f);\n"
     return res
 
 
@@ -112,8 +134,8 @@ def depth_wise_conv(weight_name, stride, padding)->str:
     _stride = "[{}, {}]".format(str(stride[0]), str(stride[1]))
     padding = ["'SAME'", "'VALID'"][padding == 'valid']
     return "im = nn.DepthwiseConv2d(im, {}, t, f, {}, {});".format(weight_name,
-                                                                  _stride,
-                                                                  padding)
+                                                                   _stride,
+                                                                   padding)
 
 
 def point_wise_conv(weight_name)->str:
@@ -125,32 +147,58 @@ def point_wise_conv(weight_name)->str:
     return "im = nn.PointwiseConv2d(im, {}, t, f);".format(weight_name)
 
 
+def pool2d(k_size, stride, p_type, padding)->str:
+    _k_size = '[{}, {}]'.format(str(k_size[0]), str(k_size[1]))
+    _stride = '[{}, {}]'.format(str(stride[0]), str(stride[1]))
+    _type = ["'MAX'", "'AVG'"][p_type != 'MaxPool2d']
+    if padding[0] >= 1 or padding[1] >= 1:
+        _padding = "'SAME'"
+    else:
+        _padding = "'VALID'"
+    return "im = nn.Pooling(im, t, f, {}, {}, {}, {});".format(_k_size,
+                                                               _type,
+                                                               _stride,
+                                                               _padding)
+
+
 def add_bias(bias_name)->str:
     return "im = nn.AddBias(im, {}, t, f);".format(bias_name)
 
 
 def relu(im_name='im')->str:
     """
-    Generator for DepthwiseConv2d in FAST-CNN.
-    Prototype: DepthwiseConv2d(obj,im,ker,t,f,stride,padding_method)
+    Generator for ReLU in FAST-CNN.
+    Prototype: im = ReLU(im)
     :param im_name:
     :return:
     """
     return "im = nn.ReLU({});".format(im_name)
 
 
-def mul_shift(mul, shift)->str:
-    tmp = "im = im * {}; \n".format(mul)
-    tmp += "im = bitshift(im, -{}); \n".format(shift)
-    return tmp
+def check_tuple(_in)->(int, int):
+    if isinstance(_in, tuple):
+        res = _in
+    else:
+        res = (_in, _in)
+    return res
 
 
 def generate(model, pre_code, cnt)->None:
+    """
+    Generate matlab simulation code recursively.
+    As the string object is immutable in Python, we use List to wrap the
+    code string to make it mutable during recursive calls.
+    :param model: the model should be replaced with QConv2d and marked its name.
+    :param pre_code: prefix of the code.
+    :param cnt: use this counter to record which params should be access.
+    :return:
+    """
     for m in model.children():
         if isinstance(m, QConv2d):
             pre_code[0] += "\n% --- Layer: {}\n".format(m.name)
-            stride = (int(m.stride[0]), int(m.stride[1]))
-            if m.padding[0] > 0 or m.padding[1] > 0:
+            stride = check_tuple(m.stride)
+            padding = check_tuple(m.padding)
+            if padding[0] > 0 or padding[1] > 0:
                 padding = 'same'
             else:
                 padding = 'valid'
@@ -176,5 +224,15 @@ def generate(model, pre_code, cnt)->None:
             pre_code[0] += ("\t" + relu())
             pre_code[0] += '\n'
 
+        if isinstance(m, nn.MaxPool2d) or isinstance(m, nn.AvgPool2d):
+            kernel_size = check_tuple(m.kernel_size)
+            stride = check_tuple(m.stride)
+            padding = check_tuple(m.padding)
+            pre_code[0] += ("\t" + pool2d(kernel_size,
+                                          stride,
+                                          m.__repr__()[:9],
+                                          padding))
+            pre_code[0] += "\n"
+            cnt[0] += 1
         else:
             generate(m, pre_code, cnt)

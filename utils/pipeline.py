@@ -21,7 +21,6 @@ class Quantize(object):
         self.min_value = -2**(bit_width-1)
 
         self.loader = loader
-
         self.use_gpu = use_gpu
 
     def apply(self, model):
@@ -145,18 +144,17 @@ def post_processing(model, pth_path, info_path, bit_width):
             scaling = q_info[m.name]
             mat_params = dict()
             mul, shift = mul_shift_calculator(scaling[0], scaling[1], scaling[2])
-            q_weight = pure_quantize(m.weight, m.w_quantizer.s, bit_width)
+            q_weight = pure_quantize(m.weight, scaling[1], bit_width)
 
             mat_params['Name'] = m.name
-
             q_weight = q_weight.permute(3, 2, 1, 0)
             mat_params['Weight'] = q_weight.detach().cpu().numpy()
 
             if m.bias is not None:
-                q_bias = pure_quantize(m.bias, m.x_quantizer.s * m.w_quantizer.s,
+                q_bias = pure_quantize(m.bias, scaling[0] * scaling[1],
                                        bit_width * 2)
                 q_bias = q_bias.detach().cpu().numpy()
-                bias_abs = torch.abs(m.bias * m.x_quantizer.s * m.w_quantizer.s)
+                bias_abs = torch.abs(m.bias * scaling[0] * scaling[1])
                 if bias_abs.max() > 2**(2*bit_width - 1) - 1:
                     print("==> Layer: {} Bias overflow.".format(m.name))
                 mat_params['Bias'] = q_bias
@@ -168,7 +166,14 @@ def post_processing(model, pth_path, info_path, bit_width):
             mat_params['Shift'] = shift
 
             mat_file.append(mat_params)
+        if isinstance(m, nn.AvgPool2d) or isinstance(m, nn.MaxPool2d):
+            mat_params = dict()
+            mat_params['Name'] = "Pooling"
+            mat_params['Stride'] = np.asarray(m.stride)
+            mat_params['Kernel'] = np.asarray(m.kernel_size)
+            mat_params['Type'] = m.__repr__()[:9]
 
+            mat_file.append(mat_params)
     sio.savemat('./result/mat/quantized.mat', {'Net': mat_file})
 
 
