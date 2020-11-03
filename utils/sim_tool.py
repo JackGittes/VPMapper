@@ -1,7 +1,8 @@
 import torch.nn as nn
 from .pipeline import search_replace_convolution2d, mark_layer
 from .absorb_bn import search_absorb_bn
-from .layer import QConv2d
+from .layer import QConv2d, QAvgPooling
+from .helper import check_tuple
 
 
 class Simulation(object):
@@ -40,7 +41,7 @@ class Simulation(object):
 
         pre_code[0] += aux_func_def(self.bit_width)
 
-        pre_code[0] = pre_code[0].replace("\t", "    ")
+        pre_code[0] = pre_code[0].replace("\t", "    ")  # Code style: 1 Tab = 4 Spaces.
         with open('./template.m', 'w') as fp:
             fp.writelines(pre_code[0])
 
@@ -161,6 +162,18 @@ def pool2d(k_size, stride, p_type, padding)->str:
                                                                _padding)
 
 
+def zero_pad2d(padding):
+    assert isinstance(padding, tuple), "Padding info must be a tuple."
+    if len(padding) == 4:
+        return "im = nn.ZeroPad2d(im, [{}, {}, {}, {}]);".format(padding[0],
+                                                                 padding[1],
+                                                                 padding[2],
+                                                                 padding[3])
+    elif len(padding) == 2:
+        return "im = nn.ZeroPad2d(im, [{}, {}]);".format(padding[0],
+                                                         padding[1])
+
+
 def add_bias(bias_name)->str:
     return "im = nn.AddBias(im, {}, t, f);".format(bias_name)
 
@@ -173,14 +186,6 @@ def relu(im_name='im')->str:
     :return:
     """
     return "im = nn.ReLU({});".format(im_name)
-
-
-def check_tuple(_in)->(int, int):
-    if isinstance(_in, tuple):
-        res = _in
-    else:
-        res = (_in, _in)
-    return res
 
 
 def generate(model, pre_code, cnt)->None:
@@ -199,9 +204,12 @@ def generate(model, pre_code, cnt)->None:
             stride = check_tuple(m.stride)
             padding = check_tuple(m.padding)
             if padding[0] > 0 or padding[1] > 0:
-                padding = 'same'
-            else:
+                # padding = 'same'
+                pre_code[0] += ("\t" + zero_pad2d(padding) + "\n")
                 padding = 'valid'
+            # else:
+
+            padding = 'valid'
             if m.groups > 1:
                 pre_code[0] += ("\t" + depth_wise_conv("net{{{}}}.Weight".format(cnt[0]),
                                                        stride, padding))
@@ -224,7 +232,8 @@ def generate(model, pre_code, cnt)->None:
             pre_code[0] += ("\t" + relu())
             pre_code[0] += '\n'
 
-        if isinstance(m, nn.MaxPool2d) or isinstance(m, nn.AvgPool2d):
+        if isinstance(m, nn.MaxPool2d) or isinstance(m, nn.AvgPool2d) \
+                or isinstance(m, QAvgPooling):
             kernel_size = check_tuple(m.kernel_size)
             stride = check_tuple(m.stride)
             padding = check_tuple(m.padding)
@@ -234,5 +243,11 @@ def generate(model, pre_code, cnt)->None:
                                           padding))
             pre_code[0] += "\n"
             cnt[0] += 1
+        if isinstance(m, nn.ZeroPad2d):
+            padding = m.padding
+            padding = check_tuple(padding)
+            pre_code[0] += ("\t" + zero_pad2d(padding))
+            pre_code[0] += '\n'
+
         else:
             generate(m, pre_code, cnt)

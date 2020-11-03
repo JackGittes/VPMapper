@@ -2,7 +2,7 @@ import time
 import torch
 import torch.nn as nn
 import pandas as pd
-from .layer import QConv2d, search_replace_convolution2d
+from .layer import QConv2d, search_replace_convolution2d, QAvgPooling
 from .absorb_bn import search_absorb_bn
 from .optimizer import mse_minimize_quantize, naive_scaling_quantize
 
@@ -122,7 +122,7 @@ def csv_writer(res):
 def post_processing(model, pth_path, info_path, bit_width):
     import numpy as np
     import scipy.io as sio
-    from .optimizer import mul_shift_calculator
+    from .base import mul_shift_calculator, pure_quantize
 
     assert isinstance(model, nn.Module)
 
@@ -147,7 +147,7 @@ def post_processing(model, pth_path, info_path, bit_width):
             q_weight = pure_quantize(m.weight, scaling[1], bit_width)
 
             mat_params['Name'] = m.name
-            q_weight = q_weight.permute(3, 2, 1, 0)
+            q_weight = q_weight.permute(2, 3, 1, 0)
             mat_params['Weight'] = q_weight.detach().cpu().numpy()
 
             if m.bias is not None:
@@ -165,8 +165,12 @@ def post_processing(model, pth_path, info_path, bit_width):
             mat_params['Mul'] = mul
             mat_params['Shift'] = shift
 
+            m.mul.data = torch.tensor(mul)
+            m.shift.data = torch.tensor(shift)
+
             mat_file.append(mat_params)
-        if isinstance(m, nn.AvgPool2d) or isinstance(m, nn.MaxPool2d):
+        if isinstance(m, nn.AvgPool2d) or isinstance(m, nn.MaxPool2d) \
+                or isinstance(m, QAvgPooling):
             mat_params = dict()
             mat_params['Name'] = "Pooling"
             mat_params['Stride'] = np.asarray(m.stride)
@@ -175,9 +179,7 @@ def post_processing(model, pth_path, info_path, bit_width):
 
             mat_file.append(mat_params)
     sio.savemat('./result/mat/quantized.mat', {'Net': mat_file})
+    torch.save(model.state_dict(), './result/pth/true_quantized.pth')
 
 
-def pure_quantize(t, s, bit_width):
-    max_v = 2 ** (bit_width - 1) - 1
-    min_v = -2 ** (bit_width - 1)
-    return torch.round(torch.clamp(t * s, min_v, max_v))
+

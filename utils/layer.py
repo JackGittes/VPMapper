@@ -6,6 +6,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
+from .base import pure_quantize
 
 
 class QuantizeLayer(nn.Module):
@@ -16,17 +17,55 @@ class QuantizeLayer(nn.Module):
         self.up_bound = 2**(bit_width-1)-1
         self.low_bound = -2**(bit_width-1)
 
+        self.true_quantize = False
+
     def forward(self, x):
-        tmp = torch.clamp(x * self.s, self.low_bound, self.up_bound)
-        return torch.round(tmp) / self.s
+        if not self.true_quantize:
+            tmp = torch.clamp(x * self.s, self.low_bound, self.up_bound)
+            return torch.round(tmp) / self.s
+        else:
+            return torch.round(torch.clamp(x * self.s,
+                                           self.low_bound, self.up_bound))
 
 
 class QConv2d(nn.Module):
-    def __init__(self, conv, bit_width, sx=1.0, sw=1.0):
+    """
+    The q_inference and q_inference_with_output properties are utilized as
+    indicators to change the forward behavior of QConv2d.
+
+    Although two indicators combine to produce four states (2x2=4), we merely
+    allow three of these states as below:
+
+    (1) q_inference = True / q_inference_with_output = False
+        In this state, the integer quantization simulation is adopted, which means
+        we first quantize weights and input using QuantizeLayer, then
+        de-quantize them with same scaling factors.
+
+        We use this state in optimization stage to find the optimal quantization
+        parameters.
+
+    (2) q_inference = False / q_inference_with_output = False
+        In this state, the full integer inference is turned on, where we quantize
+        weight, input, and bias, with corresponding scaling factors. We DO NOT
+        de-quantize them such that the output is also quantized. The multiplier
+        and shift are used to re-scale the output to a small numeric range.
+
+        More details can be found in the 8-bit quantization paper:
+
+    (3) q_inference = False / q_inference_with_output = False
+        In this state, the true floating-point inference is active.
+
+    (4) q_inference = True / q_inference_with_output = True
+        Meaningless and NOT ALLOWED.
+    """
+    def __init__(self, conv, bit_width, sx=1.0, sw=1.0, mul=1.0, shift=0.0):
         super(QConv2d, self).__init__()
         assert isinstance(conv, nn.Conv2d)
+        self.bit_width = bit_width
+
         self.stride = conv.stride
         self.padding = conv.padding
+
         self.groups = conv.groups
         self.weight = nn.Parameter(conv.weight)
 
@@ -38,26 +77,92 @@ class QConv2d(nn.Module):
         self.w_quantizer = QuantizeLayer(bit_width, torch.tensor(sw))
         self.x_quantizer = QuantizeLayer(bit_width, torch.tensor(sx))
 
-        self.q_inference = False
+        self.mul = nn.Parameter(torch.tensor(mul))
+        self.shift = nn.Parameter(torch.tensor(shift))
+
+        self.q_inference = True  # Only for quantization simulation.
+        self.q_inference_with_output = False  # With multiplier and shift.
+
+        # Flag, do not change.
         self.quantized = False
+        self.reset_quantization()
+
+        self.saturated = True
+
+    def forward(self, x):
+        assert not (self.q_inference and self.q_inference_with_output), "Ambiguous " \
+                                                                 "configuration."
+        if self.q_inference:
+            self.w_quantizer.true_quantize = False
+            self.x_quantizer.true_quantize = False
+            q_weight = self.w_quantizer(self.weight)
+            q_x = self.x_quantizer(x)
+            tmp_bias = self.bias
+
+        elif self.q_inference_with_output:
+            self.w_quantizer.true_quantize = True
+            q_weight = self.w_quantizer(self.weight)
+            q_x = x
+            tmp_bias = pure_quantize(self.bias,
+                                     self.w_quantizer.s * self.x_quantizer.s,
+                                     self.bit_width * 2)
+
+        else:  # No quantization, no simulation.
+            q_weight = self.weight
+            q_x = x
+            tmp_bias = self.bias
+
+        conv_res_ = func.conv2d(q_x, q_weight, bias=None,
+                                stride=self.stride,
+                                padding=self.padding,
+                                groups=self.groups)
+        conv_res = conv_res_ + tmp_bias[None, :, None, None]
+        if self.q_inference_with_output:
+            if self.saturated:
+                tmp_res = torch.floor(conv_res * self.mul / (2 ** self.shift))
+                tmp_res[tmp_res > (2**(self.bit_width - 1)-1)] = 2**(self.bit_width - 1)-1
+                tmp_res[tmp_res < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)
+            else:
+                tmp_res = conv_res
+            return tmp_res
+        else:
+            return conv_res
+
+    def use_full_quantization(self):
+        self.q_inference_with_output = True
+        self.q_inference = False
+
+    def use_quantization_simulation(self):
+        self.q_inference_with_output = False
+        self.q_inference = True
+
+    def reset_quantization(self):
+        self.q_inference = False
+        self.q_inference_with_output = False
+
+
+class QAvgPooling(nn.Module):
+    def __init__(self, p_layer):
+        super(QAvgPooling, self).__init__()
+        assert isinstance(p_layer, nn.AvgPool2d)
+        self.q_inference = False
+
+        self.stride = p_layer.stride
+        self.kernel_size = p_layer.kernel_size
+        self.padding = p_layer.padding
 
     def forward(self, x):
         if self.q_inference:
-            q_weight = self.w_quantizer(self.weight)
-            q_x = self.x_quantizer(x)
+            return torch.floor(func.avg_pool2d(x, self.kernel_size,
+                                               self.stride,
+                                               self.padding))
         else:
-            q_weight = self.weight
-            q_x = x
-        if self.bias is not None:
-            return func.conv2d(q_x, q_weight, bias=self.bias,
-                               stride=self.stride,
-                               padding=self.padding,
-                               groups=self.groups)
-        else:
-            return func.conv2d(q_x, q_weight, bias=None,
-                               stride=self.stride,
-                               padding=self.padding,
-                               groups=self.groups)
+            return func.avg_pool2d(x, self.kernel_size,
+                                   self.stride,
+                                   self.padding)
+
+    def __repr__(self):
+        return "AvgPool2dQ"
 
 
 class Reshape(nn.Module):
@@ -93,6 +198,9 @@ def search_replace_convolution2d(model, bit_width):
             composed_layer = nn.Sequential(Reshape((-1, in_ch, 1, 1)),
                                            QConv2d(_layer, bit_width))
             setattr(model, child_name, composed_layer)
+        elif isinstance(child, nn.AvgPool2d):
+            setattr(model, child_name, QAvgPooling(child))
         else:
             """ Recursively search the tree from left child to right child. """
             search_replace_convolution2d(child, bit_width)
+
