@@ -1,11 +1,11 @@
 import torch
 import numpy as np
 import torch.nn as nn
-from .layer import QConv2d
+from .layer import QConv2d, QAddition
 
 
 @torch.no_grad()
-def mse_minimize_quantize(x, w, o, layer, max_v, min_v):
+def mse_minimize_quantize(x, w, o, layer, max_v, min_v, device='gpu'):
     """
     The algorithm utilized to determine optimal scaling factors for x and w is proposed in paper:
 
@@ -23,9 +23,10 @@ def mse_minimize_quantize(x, w, o, layer, max_v, min_v):
     :param layer: the convolution layer that need to be quantized.
     :param max_v: the max numeric value of a certain bit-width, e.g. 127 of 8-bit signed integer.
     :param min_v: the same as max_v.
+    :param device: which device is used.
     :return: scaling factors for input (x) and weight (w).
     """
-    assert isinstance(layer, QConv2d)
+    assert isinstance(layer, QConv2d) or isinstance(layer, QAddition)
     assert isinstance(x, torch.Tensor) and isinstance(w, torch.Tensor) and isinstance(o, torch.Tensor)
 
     beta = 0.85
@@ -52,9 +53,11 @@ def mse_minimize_quantize(x, w, o, layer, max_v, min_v):
     s_x_list = [(sx_min + (_item + 1) * (sx_max - sx_min) / sample_points) for _item in range(sample_points)]
     s_w_list = [(sw_min + (_item + 1) * (sw_max - sw_min) / sample_points) for _item in range(sample_points)]
 
-    if layer.weight.device != torch.device('cpu'):
-        x = x.to(layer.weight.device)
-        o = o.to(layer.weight.device)
+    if device != 'cpu':
+        x = x.cuda()
+        o = o.cuda()
+        if isinstance(layer, QAddition):
+            w = w.cuda()
 
     err_array = []
 
@@ -63,9 +66,12 @@ def mse_minimize_quantize(x, w, o, layer, max_v, min_v):
 
     layer.use_quantization_simulation()
 
-    err0 = criterion(layer(x), o).detach().item()
-    print("Initial MSE error: {:>4.4f}".format(float(err0)))
+    if isinstance(layer, QConv2d):
+        err0 = criterion(layer(x), o).detach().item()
+    else:
+        err0 = criterion(layer(x, w), o).detach().item()
 
+    print("Initial MSE error: {:>4.4f}".format(float(err0)))
     print("Searching ...")
 
     with torch.no_grad():
@@ -73,7 +79,12 @@ def mse_minimize_quantize(x, w, o, layer, max_v, min_v):
             for _s_w in s_w_list:
                 layer.x_quantizer.s.data = torch.tensor(_s_x)
                 layer.w_quantizer.s.data = torch.tensor(_s_w)
-                err = criterion(layer(x), o)
+
+                if isinstance(layer, QConv2d):
+                    err = criterion(layer(x), o)
+                else:
+                    err = criterion(layer(x, w), o)
+
                 err_ = err.detach().item()
                 err_array.append([_s_x, _s_w, float(err_)])
 

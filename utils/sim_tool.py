@@ -36,7 +36,7 @@ class Simulation(object):
         pre_code[0] += input_normalize()
 
         generate(model, pre_code, [1])
-        pre_code[0] += "\n\tstat={};\n" \
+        pre_code[0] += "\n\tstat={};  % Collect desired intermediate results in stat.\n" \
                        "end\n"
 
         pre_code[0] += aux_func_def(self.bit_width)
@@ -85,8 +85,10 @@ def aux_func_def(bit_width)->str:
     max_v_bb = 2 ** (2*bit_width-1) - 1
     min_v_bb = - 2 ** (2*bit_width - 1)
     res = "\nfunction res = cast_int(im, mul, sft) \n" \
-          "\tim(im < {}) = {};\n" \
-          "\tim(im > {}) = {};\n" \
+          "%------ Uncomment to use intermediate results cast.------\n" \
+          "%\tim(im < {}) = {};\n" \
+          "%\tim(im > {}) = {};\n" \
+          "%-------------------- Comment end. ----------------------\n" \
           "\tim = im * mul;\n" \
           "\tim = bitshift(im, -sft);\n" \
           "\tim(im > {}) = {};\n" \
@@ -204,11 +206,7 @@ def generate(model, pre_code, cnt)->None:
             stride = check_tuple(m.stride)
             padding = check_tuple(m.padding)
             if padding[0] > 0 or padding[1] > 0:
-                # padding = 'same'
                 pre_code[0] += ("\t" + zero_pad2d(padding) + "\n")
-                padding = 'valid'
-            # else:
-
             padding = 'valid'
             if m.groups > 1:
                 pre_code[0] += ("\t" + depth_wise_conv("net{{{}}}.Weight".format(cnt[0]),
@@ -234,13 +232,11 @@ def generate(model, pre_code, cnt)->None:
 
         if isinstance(m, nn.MaxPool2d) or isinstance(m, nn.AvgPool2d) \
                 or isinstance(m, QAvgPooling):
+            pre_code[0] += "\n% --- Layer: {}\n".format(m.name)
             kernel_size = check_tuple(m.kernel_size)
             stride = check_tuple(m.stride)
             padding = check_tuple(m.padding)
-            pre_code[0] += ("\t" + pool2d(kernel_size,
-                                          stride,
-                                          m.__repr__()[:9],
-                                          padding))
+            pre_code[0] += ("\t" + pool2d(kernel_size, stride, m.__repr__()[:9], padding))
             pre_code[0] += "\n"
             cnt[0] += 1
         if isinstance(m, nn.ZeroPad2d):

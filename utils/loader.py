@@ -16,7 +16,7 @@ class CalibrationData(dataset.Dataset):
         return len(self.files)
 
     def __getitem__(self, idx):
-        img = Image.open(self.files[idx])
+        img = Image.open(self.files[idx]).convert("RGB")
         return self.trans(img)
 
 

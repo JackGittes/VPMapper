@@ -10,6 +10,11 @@ from .base import pure_quantize
 
 
 class QuantizeLayer(nn.Module):
+    """
+    self.true_quantize = True means it will not de-quantize the output.
+    self.true_quantize = False means the output will be de-quantized to
+    floating-point numbers.
+    """
     def __init__(self, bit_width, s):
         super(QuantizeLayer, self).__init__()
         self.bit_width = bit_width
@@ -28,7 +33,7 @@ class QuantizeLayer(nn.Module):
                                            self.low_bound, self.up_bound))
 
 
-class QConv2d(nn.Module):
+class QTemplate(nn.Module):
     """
     The q_inference and q_inference_with_output properties are utilized as
     indicators to change the forward behavior of QConv2d.
@@ -44,7 +49,7 @@ class QConv2d(nn.Module):
         We use this state in optimization stage to find the optimal quantization
         parameters.
 
-    (2) q_inference = False / q_inference_with_output = False
+    (2) q_inference = False / q_inference_with_output = True
         In this state, the full integer inference is turned on, where we quantize
         weight, input, and bias, with corresponding scaling factors. We DO NOT
         de-quantize them such that the output is also quantized. The multiplier
@@ -58,6 +63,34 @@ class QConv2d(nn.Module):
     (4) q_inference = True / q_inference_with_output = True
         Meaningless and NOT ALLOWED.
     """
+    def __init__(self):
+        super(QTemplate, self).__init__()
+        self.q_inference = True  # Only for quantization simulation.
+        self.q_inference_with_output = False  # With multiplier and shift.
+
+        # Flag, do not change.
+        self.quantized = False
+        self.reset_quantization()
+
+        self.saturated = True
+
+    def forward(self, *x):
+        pass
+
+    def use_full_quantization(self):
+        self.q_inference_with_output = True
+        self.q_inference = False
+
+    def use_quantization_simulation(self):
+        self.q_inference_with_output = False
+        self.q_inference = True
+
+    def reset_quantization(self):
+        self.q_inference = False
+        self.q_inference_with_output = False
+
+
+class QConv2dv1(nn.Module):
     def __init__(self, conv, bit_width, sx=1.0, sw=1.0, mul=1.0, shift=0.0):
         super(QConv2d, self).__init__()
         assert isinstance(conv, nn.Conv2d)
@@ -112,11 +145,10 @@ class QConv2d(nn.Module):
             q_x = x
             tmp_bias = self.bias
 
-        conv_res_ = func.conv2d(q_x, q_weight, bias=None,
-                                stride=self.stride,
-                                padding=self.padding,
-                                groups=self.groups)
-        conv_res = conv_res_ + tmp_bias[None, :, None, None]
+        conv_res = func.conv2d(q_x, q_weight, bias=tmp_bias,
+                               stride=self.stride,
+                               padding=self.padding,
+                               groups=self.groups)
         if self.q_inference_with_output:
             if self.saturated:
                 tmp_res = torch.floor(conv_res * self.mul / (2 ** self.shift))
@@ -141,6 +173,95 @@ class QConv2d(nn.Module):
         self.q_inference_with_output = False
 
 
+class QConv2d(QTemplate):
+    """
+    The q_inference and q_inference_with_output properties are utilized as
+    indicators to change the forward behavior of QConv2d.
+
+    Although two indicators combine to produce four states (2x2=4), we merely
+    allow three of these states as below:
+
+    (1) q_inference = True / q_inference_with_output = False
+        In this state, the integer quantization simulation is adopted, which means
+        we first quantize weights and input using QuantizeLayer, then
+        de-quantize them with same scaling factors.
+
+        We use this state in optimization stage to find the optimal quantization
+        parameters.
+
+    (2) q_inference = False / q_inference_with_output = True
+        In this state, the full integer inference is turned on, where we quantize
+        weight, input, and bias, with corresponding scaling factors. We DO NOT
+        de-quantize them such that the output is also quantized. The multiplier
+        and shift are used to re-scale the output to a small numeric range.
+
+        More details can be found in the 8-bit quantization paper:
+
+    (3) q_inference = False / q_inference_with_output = False
+        In this state, the true floating-point inference is active.
+
+    (4) q_inference = True / q_inference_with_output = True
+        Meaningless and NOT ALLOWED.
+    """
+    def __init__(self, conv, bit_width, sx=1.0, sw=1.0, mul=1.0, shift=0.0):
+        super(QConv2d, self).__init__()
+        assert isinstance(conv, nn.Conv2d)
+        self.bit_width = bit_width
+
+        self.stride = conv.stride
+        self.padding = conv.padding
+
+        self.groups = conv.groups
+        self.weight = nn.Parameter(conv.weight)
+
+        if conv.bias is not None and torch.numel(conv.bias) > 0:
+            self.bias = nn.Parameter(conv.bias)
+        else:
+            self.bias = None
+
+        self.w_quantizer = QuantizeLayer(bit_width, torch.tensor(sw))
+        self.x_quantizer = QuantizeLayer(bit_width, torch.tensor(sx))
+
+        self.mul = nn.Parameter(torch.tensor(mul))
+        self.shift = nn.Parameter(torch.tensor(shift))
+
+    def forward(self, x):
+        assert not (self.q_inference and self.q_inference_with_output), "Ambiguous " \
+                                                                 "configuration."
+        if self.q_inference:
+            self.w_quantizer.true_quantize = False
+            self.x_quantizer.true_quantize = False
+            q_weight = self.w_quantizer(self.weight)
+            q_x = self.x_quantizer(x)
+            tmp_bias = self.bias
+
+        elif self.q_inference_with_output:
+            self.w_quantizer.true_quantize = True
+            q_weight = self.w_quantizer(self.weight)
+            q_x = x
+            tmp_bias = pure_quantize(self.bias,
+                                     self.w_quantizer.s * self.x_quantizer.s,
+                                     self.bit_width * 2)
+
+        else:  # No quantization, no simulation.
+            q_weight = self.weight
+            q_x = x
+            tmp_bias = self.bias
+
+        conv_res = func.conv2d(q_x, q_weight, bias=tmp_bias,
+                               stride=self.stride,
+                               padding=self.padding,
+                               groups=self.groups)
+        if self.q_inference_with_output:
+            tmp_res = torch.floor(conv_res * self.mul / (2 ** self.shift))
+            if self.saturated:
+                tmp_res[tmp_res > (2**(self.bit_width - 1)-1)] = 2**(self.bit_width - 1)-1
+                tmp_res[tmp_res < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)
+            return tmp_res
+        else:
+            return conv_res
+
+
 class QAvgPooling(nn.Module):
     def __init__(self, p_layer):
         super(QAvgPooling, self).__init__()
@@ -153,6 +274,8 @@ class QAvgPooling(nn.Module):
 
     def forward(self, x):
         if self.q_inference:
+            # Use torch.floor not torch.round to keep consistent with
+            # hardware features.
             return torch.floor(func.avg_pool2d(x, self.kernel_size,
                                                self.stride,
                                                self.padding))
@@ -162,7 +285,56 @@ class QAvgPooling(nn.Module):
                                    self.padding)
 
     def __repr__(self):
+        """
+        This __repr__ method is an identifier for its layer type.
+        As implemented in utils.sim_tool.generate, pooling layers
+        are converted to MATLAB code by their __repr__ methods. We
+        thus define its __repr__ as "AvgPool2dQ" such that it can
+        be converted to AvgPooling2d.
+        :return:
+        """
         return "AvgPool2dQ"
+
+
+class QAddition(QTemplate):
+    """
+    The addition layer is a bi-operand layer, which takes two operands as inputs
+    and adds them. Therefore, it can also be represented an quantization operator
+    in a given network. We denote the addition layer as QAddition layer.
+
+    We use the same strategy as the convolution layer to quantize addition layer.
+
+    First, we collect the input lhs and rhs (i.e. x1, x2) to get the proper scaling
+    factors. After that, we re-scale the output based on the cascaded layer's input
+    scaling factor.
+    """
+    def __init__(self, bit_width):
+        super(QAddition, self).__init__()
+        self.x_quantizer = QuantizeLayer(bit_width, torch.tensor(1.0))
+        self.w_quantizer = QuantizeLayer(bit_width, torch.tensor(1.0))
+
+        self.mul = nn.Parameter(torch.tensor(1.0))
+        self.shift = nn.Parameter(torch.tensor(0.0))
+
+    def forward(self, x1, x2):
+        if self.q_inference:
+            self.x_quantizer.true_quantize = False
+            self.w_quantizer.true_quantize = False
+            x1 = self.x_quantizer(x1)
+            x2 = self.w_quantizer(x2)
+            return x1 + x2
+        elif self.q_inference_with_output:
+            self.x_quantizer.true_quantize = True
+            self.w_quantizer.true_quantize = True
+            x1 = self.x_quantizer(x1)
+            x2 = self.w_quantizer(x2)
+            out = torch.floor((x1 + x2) * self.mul / (2 ** self.shift))
+            if self.saturated:
+                out[out > (2**(self.bit_width - 1)-1)] = 2**(self.bit_width - 1)-1
+                out[out < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)
+            return out
+        else:
+            return x1 + x2
 
 
 class Reshape(nn.Module):
@@ -199,7 +371,7 @@ def search_replace_convolution2d(model, bit_width):
                                            QConv2d(_layer, bit_width))
             setattr(model, child_name, composed_layer)
         elif isinstance(child, nn.AvgPool2d):
-            setattr(model, child_name, QAvgPooling(child))
+            setattr(model, child_name, QAvgPooling(child))  # Replace AvgPooling
         else:
             """ Recursively search the tree from left child to right child. """
             search_replace_convolution2d(child, bit_width)

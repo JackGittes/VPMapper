@@ -2,7 +2,7 @@ import time
 import torch
 import torch.nn as nn
 import pandas as pd
-from .layer import QConv2d, search_replace_convolution2d, QAvgPooling
+from .layer import QConv2d, search_replace_convolution2d, QAvgPooling, QAddition
 from .absorb_bn import search_absorb_bn
 from .optimizer import mse_minimize_quantize, naive_scaling_quantize
 
@@ -46,29 +46,55 @@ class Quantize(object):
         res_report = []
         total_time = 0.0
         for m in model.modules():
-            if isinstance(m, QConv2d) and not m.quantized:
+            if (isinstance(m, QConv2d) and not m.quantized) or (
+                    isinstance(m, QAddition) and not m.quantized):
                 start_time = time.time()
-
-                cached = []
                 print("==> Start quantizing layer: {} ".format(m.name))
 
-                def save_hook(_, _input, _output):
-                    cached.append(_input[0].detach().cpu())
-                    cached.append(_output.detach().cpu())
+                cached_input = []
+                cached_output = []
 
-                handle = m.register_forward_hook(save_hook)
+                cached_input_lhs = []
+                cached_input_rhs = []
+
+                if isinstance(m, QConv2d):
+                    layer_type = 'CONV'
+
+                    def save_hook_conv(_, _input, _output):
+                        cached_input.append(_input[0].detach().cpu())
+                        cached_output.append(_output.detach().cpu())
+                    handle = m.register_forward_hook(save_hook_conv)
+                else:
+                    layer_type = 'ADD'
+
+                    def save_hook_add(_, _input, _output):
+                        cached_input_lhs.append(_input[0].detach().cpu())
+                        cached_input_rhs.append(_input[1].detach().cpu())
+                        cached_output.append(_output.detach().cpu())
+                    handle = m.register_forward_hook(save_hook_add)
+
                 for im in self.loader:
                     if self.use_gpu:
                         im = im.cuda()
                     model(im)
                 handle.remove()  # save_hook must be removed.
 
-                s1, s2 = self.quantize(cached[0], m.weight.detach().cpu(), cached[1], m)
+                if isinstance(m, QConv2d):
+                    _x = torch.cat(cached_input, dim=0)
+                    _w = m.weight.detach().cpu()
+                    _o = torch.cat(cached_output, dim=0)
+                else:
+                    _x = torch.cat(cached_input_lhs, dim=0)
+                    _w = torch.cat(cached_input_rhs, dim=0)
+                    _o = torch.cat(cached_output, dim=0)
+                s1, s2 = self.quantize(_x, _w, _o, m)
+
                 print("S1: {:>2.2f}".format(float(s1)), " S2: {:>2.2f}".format(float(s2)))
                 m.x_quantizer.s.data = s1
                 m.w_quantizer.s.data = s2
                 m.quantized = True
-                res_report.append([cnt, m.name, s1.item(), s2.item()])
+
+                res_report.append([cnt, m.name, s1.item(), s2.item(), layer_type])
                 cnt += 1
 
                 end_time = time.time()
@@ -89,7 +115,8 @@ class Quantize(object):
             raise RuntimeError("Unknown Quantization Method.")
 
     def mse_quantize(self, x, w, o, layer):
-        return mse_minimize_quantize(x, w, o, layer, self.max_value, self.min_value)
+        return mse_minimize_quantize(x, w, o, layer, self.max_value, self.min_value,
+                                     device=['cpu', 'gpu'][self.use_gpu])
 
     def naive_quantize(self, x, w, _, __):
         return naive_scaling_quantize(x, w, None, None, self.max_value, self.min_value)
@@ -98,7 +125,8 @@ class Quantize(object):
 def mark_layer(model, name):
     cnt = 0
     for child_name, child in model.named_children():
-        if isinstance(child, QConv2d):
+        if isinstance(child, QConv2d) or isinstance(child, QAvgPooling) or \
+                isinstance(child, QAddition):
             child.name = name + '.' + str(cnt)
             cnt += 1
         else:
@@ -111,11 +139,11 @@ def csv_writer(res):
     extended_res = []
     for _idx in range(info_len):
         tmp = res[_idx]
-        tmp.append(res[(_idx+1) % info_len][2])
-        tmp.append((_idx+1) % info_len)
-        extended_res.append(tmp)
+        src_id, layer_name, s1, s2, layer_type = tmp  # unpack layer info.
+        extended_res.append([src_id, layer_name, s1, s2, res[(_idx+1) % info_len][2],
+                             layer_type, (_idx+1) % info_len])
     extended_res[info_len-1][4] = 0.0
-    df = pd.DataFrame(res, columns=["SRC", "Name", "S1", "S2", "S3", "DST"])
+    df = pd.DataFrame(extended_res, columns=["SRC", "Name", "S1", "S2", "S3", "DST", "TYPE"])
     df.to_csv('./report/info.csv', index=False)
 
 
@@ -148,6 +176,10 @@ def post_processing(model, pth_path, info_path, bit_width):
 
             mat_params['Name'] = m.name
             q_weight = q_weight.permute(2, 3, 1, 0)
+
+            if m.groups > 1:
+                q_weight = q_weight.squeeze(dim=2)
+
             mat_params['Weight'] = q_weight.detach().cpu().numpy()
 
             if m.bias is not None:
@@ -169,6 +201,7 @@ def post_processing(model, pth_path, info_path, bit_width):
             m.shift.data = torch.tensor(shift)
 
             mat_file.append(mat_params)
+
         if isinstance(m, nn.AvgPool2d) or isinstance(m, nn.MaxPool2d) \
                 or isinstance(m, QAvgPooling):
             mat_params = dict()
@@ -180,6 +213,3 @@ def post_processing(model, pth_path, info_path, bit_width):
             mat_file.append(mat_params)
     sio.savemat('./result/mat/quantized.mat', {'Net': mat_file})
     torch.save(model.state_dict(), './result/pth/true_quantized.pth')
-
-
-
