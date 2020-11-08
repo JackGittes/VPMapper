@@ -18,7 +18,7 @@ def init_bn_params(bn_module):
         bn_module.bias.fill_(0)
 
 
-def absorb_bn(module, bn_module, remove_bn=True, verbose=True):
+def absorb_bn(module, bn_module, remove_bn=False, verbose=True):
     with torch.no_grad():
         w = module.weight
         if module.bias is None:
@@ -28,28 +28,22 @@ def absorb_bn(module, bn_module, remove_bn=True, verbose=True):
             module.register_parameter('bias', bias)
         b = module.bias
 
-        bn_module.track_running_stats = False
         if hasattr(bn_module, 'running_mean'):
             b.add_(-bn_module.running_mean)
+
         if hasattr(bn_module, 'running_var'):
             invstd = bn_module.running_var.clone().add_(bn_module.eps).pow_(-0.5)
             w.mul_(invstd.view(w.size(0), 1, 1, 1))
             b.mul_(invstd)
-            if hasattr(module, 'quantize_weight'):
-                module.quantize_weight.running_range.mul_(invstd.view(w.size(0), 1, 1, 1))
-                module.quantize_weight.running_zero_point.mul_(invstd.view(w.size(0), 1, 1, 1))
 
         if hasattr(bn_module, 'weight'):
             w.mul_(bn_module.weight.view(w.size(0), 1, 1, 1))
             b.mul_(bn_module.weight)
-            module.register_parameter('gamma', nn.Parameter(bn_module.weight.data.clone()))
-            if hasattr(module, 'quantize_weight'):
-                module.quantize_weight.running_range.mul_(bn_module.weight.view(w.size(0), 1, 1, 1))
-                module.quantize_weight.running_zero_point.mul_(bn_module.weight.view(w.size(0), 1, 1, 1))
+
         if hasattr(bn_module, 'bias'):
             b.add_(bn_module.bias)
-            module.register_parameter('beta', nn.Parameter(bn_module.bias.data.clone()))
 
+        bn_module.eps = 0.
         if remove_bn:
             remove_bn_params(bn_module)
         else:
@@ -68,7 +62,7 @@ def is_absorbing(m):
     return isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear)
 
 
-def search_absorb_bn(model, prev=None, remove_bn=True, verbose=True):
+def search_absorb_bn(model, prev=None, remove_bn=False, verbose=True):
     with torch.no_grad():
         for m in model.children():
             if is_bn(m) and is_absorbing(prev):

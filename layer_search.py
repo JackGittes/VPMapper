@@ -34,23 +34,23 @@ def q_():
     from utils import pipeline
     #
     from model.mbv2 import MBV2Face
-    from model.backbone.mobilenetv2_q import InvertedResidual
+    # from model.backbone.mobilenetv2_q import InvertedResidual
     from model.shipnet import ShipNet
     # #
-    net = MBV2Face()
+    # net = MBV2Face()
 
-    data_set = CalibrationData(folder="H:\Dataset\Face\calib", im_size=(128, 128))
-    loader = DataLoader(data_set, num_workers=8, batch_size=100, shuffle=False)
-    net.load_state_dict(torch.load('./model/039.pth')['state_dict'])
-
-    for m in net.modules():
-        if isinstance(m, InvertedResidual):
-            m.turn_on_add()
-
-    q = pipeline.Quantize(bit_width=8, loader=loader,
-                          use_gpu=True, q_method='MSE')
-
-    q.apply(net)
+    # data_set = CalibrationData(folder="H:\Dataset\Face\calib", im_size=(128, 128))
+    # loader = DataLoader(data_set, num_workers=8, batch_size=100, shuffle=False)
+    # net.load_state_dict(torch.load('./model/039.pth')['state_dict'])
+    #
+    # for m in net.modules():
+    #     if isinstance(m, InvertedResidual):
+    #         m.turn_on_add()
+    #
+    # q = pipeline.Quantize(bit_width=8, loader=loader,
+    #                       use_gpu=True, q_method='MSE')
+    #
+    # q.apply(net)
 
     # data_set = CalibrationData(folder="H:/Dataset/Ship_Data/Ship_Four_CLS/calib", im_size=(32, 32))
     # loader = DataLoader(data_set, num_workers=8, batch_size=100, shuffle=False)
@@ -94,12 +94,24 @@ def q_():
     #     pass
 
     # from torchvision.models.mobilenet import mobilenet_v2
-    # #
-    # net = mobilenet_v2(pretrained=True)
-    # # net.load_state_dict(torch.load('./model/039.pth')['state_dict'])
-    # q = pipeline.Quantize(bit_width=8, loader=loader,
-    #                       use_gpu=True, q_method='Naive')
-    # q.apply(net)
+    #
+
+    from model.mobilenet_v2_q import mobilenet_v2, InvertedResidual
+    net = mobilenet_v2(pretrained=True)
+
+    data_set = CalibrationData(folder="H:\Dataset\ImageNet\calib", im_size=(224, 224), mean=[0.485, 0.456, 0.406],
+                               std=[0.229, 0.224, 0.225])
+    loader = DataLoader(data_set, num_workers=8, batch_size=100, shuffle=False)
+    # net.load_state_dict(torch.load('./model/039.pth')['state_dict'])
+    net.load_state_dict(torch.load('model/pretrained/mobilenet_v2-b0353104.pth'))
+    for m in net.modules():
+        if isinstance(m, InvertedResidual):
+            m.turn_on_add()
+
+    q = pipeline.Quantize(bit_width=8, loader=loader,
+                          use_gpu=True, q_method='Naive')
+
+    q.apply(net)
 
     # from model.mobilenet import MobileNet_v1
     # #

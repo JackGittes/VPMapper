@@ -5,12 +5,13 @@ from torchvision.transforms import transforms
 
 
 class CalibrationData(dataset.Dataset):
-    def __init__(self, folder, im_size=(128, 128)):
+    def __init__(self, folder, im_size=(128, 128), mean=(0.5, 0.5, 0.5),
+                 std=(0.5, 0.5, 0.5)):
         super(CalibrationData, self).__init__()
         self.files = []
         for item in os.listdir(folder):
             self.files.append(os.path.join(folder, item))
-        self.trans = get_calibration_trans(im_size)
+        self.trans = get_calibration_trans(im_size, mean=mean, std=std)
 
     def __len__(self):
         return len(self.files)
@@ -20,10 +21,11 @@ class CalibrationData(dataset.Dataset):
         return self.trans(img)
 
 
-def get_calibration_trans(im_size=(128, 128)):
+def get_calibration_trans(im_size=(128, 128), mean=(0.5, 0.5, 0.5),
+                          std=(0.5, 0.5, 0.5)):
     trans = transforms.Compose([
         transforms.Resize(im_size),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.5], std=[0.5])
+        transforms.Normalize(mean=mean, std=std)
     ])
     return trans

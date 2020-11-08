@@ -1,7 +1,7 @@
 import torch.nn as nn
 from .pipeline import search_replace_convolution2d, mark_layer
 from .absorb_bn import search_absorb_bn
-from .layer import QConv2d, QAvgPooling
+from .layer import QConv2d, QAvgPooling, QAddition
 from .helper import check_tuple
 
 
@@ -180,6 +180,10 @@ def add_bias(bias_name)->str:
     return "im = nn.AddBias(im, {}, t, f);".format(bias_name)
 
 
+def add(m1, s1, m2, s2)->str:
+    return "im = nn.Add(im, im, {}, {}, {}, {});".format(m1, s1, m2, s2)
+
+
 def relu(im_name='im')->str:
     """
     Generator for ReLU in FAST-CNN.
@@ -224,8 +228,16 @@ def generate(model, pre_code, cnt)->None:
 
             pre_code[0] += ("\t" + "im = cast_int(im, net{{{}}}.Mul, "
                                    "net{{{}}}.Shift);\n".format(cnt[0], cnt[0]))
-
             cnt[0] += 1
+
+        if isinstance(m, QAddition):
+            pre_code[0] += "\n% --- Element-wise Addition: {}\n".format(m.name)
+            pre_code[0] += ("\t" + add("net{{{}}}.Mul_L", "net{{{}}}.Shift_L",
+                                       "net{{{}}}.Mul_R", "net{{{}}}.Shift_R").format(cnt[0], cnt[0],
+                                                                                      cnt[0], cnt[0]))
+            pre_code[0] += '\n'
+            cnt[0] += 1
+
         if isinstance(m, nn.ReLU) or isinstance(m, nn.ReLU6):
             pre_code[0] += ("\t" + relu())
             pre_code[0] += '\n'

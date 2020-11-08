@@ -255,7 +255,7 @@ class QConv2d(QTemplate):
         if self.q_inference_with_output:
             tmp_res = torch.floor(conv_res * self.mul / (2 ** self.shift))
             if self.saturated:
-                tmp_res[tmp_res > (2**(self.bit_width - 1)-1)] = 2**(self.bit_width - 1)-1
+                tmp_res[tmp_res > (2**(self.bit_width - 1) - 1)] = 2 ** (self.bit_width - 1) - 1
                 tmp_res[tmp_res < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)
             return tmp_res
         else:
@@ -310,11 +310,18 @@ class QAddition(QTemplate):
     """
     def __init__(self, bit_width):
         super(QAddition, self).__init__()
+        self.bit_width = bit_width
+
         self.x_quantizer = QuantizeLayer(bit_width, torch.tensor(1.0))
         self.w_quantizer = QuantizeLayer(bit_width, torch.tensor(1.0))
 
-        self.mul = nn.Parameter(torch.tensor(1.0))
-        self.shift = nn.Parameter(torch.tensor(0.0))
+        self.mul_lhs = nn.Parameter(torch.tensor(1.0))
+        self.shift_lhs = nn.Parameter(torch.tensor(0.0))
+
+        self.mul_rhs = nn.Parameter(torch.tensor(1.0))
+        self.shift_rhs = nn.Parameter(torch.tensor(0.0))
+
+        self.forward_1 = True
 
     def forward(self, x1, x2):
         if self.q_inference:
@@ -324,14 +331,22 @@ class QAddition(QTemplate):
             x2 = self.w_quantizer(x2)
             return x1 + x2
         elif self.q_inference_with_output:
-            self.x_quantizer.true_quantize = True
-            self.w_quantizer.true_quantize = True
-            x1 = self.x_quantizer(x1)
-            x2 = self.w_quantizer(x2)
-            out = torch.floor((x1 + x2) * self.mul / (2 ** self.shift))
-            if self.saturated:
-                out[out > (2**(self.bit_width - 1)-1)] = 2**(self.bit_width - 1)-1
-                out[out < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)
+            # out = torch.floor(x1 * self.mul_lhs / (2 ** self.shift_lhs)) + \
+            #     torch.floor(x2 * self.mul_rhs / (2 ** self.shift_rhs))
+            if self.forward_1:
+                out = torch.round((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
+            else:
+                out = torch.round(x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
+                        x2 * self.mul_rhs / (2 ** self.shift_rhs))
+
+                out = torch.round(x1 * self.mul_lhs / (2 ** self.shift_lhs)) + \
+                      torch.round(x2 * self.mul_rhs / (2 ** self.shift_rhs))
+            # out = torch.round((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
+            # out = x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
+            #     x2 * self.mul_rhs / (2 ** self.shift_rhs)
+            # if self.saturated:
+            #     out[out > (2 ** (self.bit_width - 1) - 1)] = 2**(self.bit_width - 1) - 1
+            #     out[out < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)
             return out
         else:
             return x1 + x2
@@ -376,3 +391,10 @@ def search_replace_convolution2d(model, bit_width):
             """ Recursively search the tree from left child to right child. """
             search_replace_convolution2d(child, bit_width)
 
+
+def search_turn_off_relu6(model):
+    for child_name, child in model.named_children():
+        if isinstance(child, nn.ReLU6):
+            setattr(model, child_name, nn.ReLU())
+        else:
+            search_turn_off_relu6(child)
