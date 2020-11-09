@@ -43,7 +43,7 @@ be
 
 
 | **Operator** |  **Status**  |
-|:  ----  :|:  ----  :|
+|:----:|:----:|
 |  Conv2d  |     √    |
 |  DWConv2d  |     √    |
 |  PWConv2d  |     √    |
