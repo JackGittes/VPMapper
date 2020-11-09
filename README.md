@@ -1,4 +1,9 @@
-## **Standard Quantization Pipeline for DREMI vision processor**
+## **Standard Quantization Pipeline for DREMI Vision Processor**
+
+Author: Zhao Mingxin, Zheng Xuemin
+
+
+### **0. Overview**
 
 
 ### **1. Preliminary**
@@ -18,6 +23,9 @@ we find it does little impact on accuracy in terms of our application scenarios.
 right-shift are saturated to 16-bit. Therefore, when we multiply them with the
 multiplier, we can do this operation with 16-bit x 16-bit multiplication and store
 the results to a 32-bit register without bothering to have a 64-bit register.
+
+
+![Data flow in DREMI vision chip](doc/pic/dataflow.png)
 
 
 - **Which layer can be quantized** ?
