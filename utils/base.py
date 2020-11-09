@@ -45,7 +45,7 @@ def scaling_align_calculator(s3_1, s3_2):
     mul_range_safe = False
     final_list = []
     for item in m_s_list:
-        if 8192 <= item[0] <= 32767 and 8192 <= item[1] <= 32767:
+        if 1024 <= item[0] <= 4096 and 1024 <= item[1] <= 4096:
             mul_range_safe = True
             final_list.append(item)
 

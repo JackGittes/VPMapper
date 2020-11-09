@@ -35,6 +35,13 @@ class QuantizeLayer(nn.Module):
 
 class QTemplate(nn.Module):
     """
+    This class defines the prototype of all quantization operators, which includes
+    some essential properties such as inference states and arithmetic features.
+    Accordingly, class methods to control these internal properties are also
+    defined here.
+
+    1. Inference States:
+
     The q_inference and q_inference_with_output properties are utilized as
     indicators to change the forward behavior of QConv2d.
 
@@ -62,7 +69,33 @@ class QTemplate(nn.Module):
 
     (4) q_inference = True / q_inference_with_output = True
         Meaningless and NOT ALLOWED.
+
+    2. Arithmetic Features:
+
+    (1) Rounding mode: current support three rounding modes ('b' denotes
+    binary representation.):
+        Round: 0101.1110 (b) -> 0110 (b)
+               0101.0110 (b) -> 0101 (b)
+        Floor: 0101.1110 (b) -> 0101 (b)
+               0101.0110 (b) -> 0101 (b)
+        Ceil:  0101.1110 (b) -> 0110 (b)
+               0101.0110 (b) -> 0110 (b)
+
+    (2) Saturation: If saturated is True, the output should be saturated to
+    the up bound of the specific bit-width.
+
+
+    3. Internal Status Indicator
+
+    (1) quantized: if quantized is True, it indicates the corresponding layer is
+    quantized by the pipeline. It should be noted that, although it indicates
+    the quantization status, self.quantized is merely employed in quantization
+    pipeline and should not be used in other places.
+
     """
+
+    _Rounding = ['Round', 'Floor', 'Ceil']
+
     def __init__(self):
         super(QTemplate, self).__init__()
         self.q_inference = True  # Only for quantization simulation.
@@ -73,6 +106,7 @@ class QTemplate(nn.Module):
         self.reset_quantization()
 
         self.saturated = True
+        self.round = self._Rounding[0]  # default rounding mode: Round.
 
     def forward(self, *x):
         pass
@@ -141,7 +175,9 @@ class QConv2d(QTemplate):
                                padding=self.padding,
                                groups=self.groups)
         if self.q_inference_with_output:
-            tmp_res = torch.floor(conv_res * self.mul / (2 ** self.shift))
+            # tmp_res = torch.floor(conv_res * self.mul / (2 ** self.shift))
+            tmp_res = torch.round(conv_res * self.mul / (2 ** self.shift))
+            # tmp_res = torch.ceil(conv_res * self.mul / (2 ** self.shift))
             if self.saturated:
                 tmp_res[tmp_res > (2**(self.bit_width - 1) - 1)] = 2 ** (self.bit_width - 1) - 1
                 tmp_res[tmp_res < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)
@@ -164,9 +200,12 @@ class QAvgPooling(nn.Module):
         if self.q_inference:
             # Use torch.floor not torch.round to keep consistent with
             # hardware features.
-            return torch.floor(func.avg_pool2d(x, self.kernel_size,
-                                               self.stride,
-                                               self.padding))
+            # return torch.floor(func.avg_pool2d(x, self.kernel_size,
+            #                                    self.stride,
+            #                                    self.padding))
+            return torch.round(func.avg_pool2d(x, self.kernel_size,
+                                                  self.stride,
+                                                  self.padding))
         else:
             return func.avg_pool2d(x, self.kernel_size,
                                    self.stride,
@@ -227,15 +266,17 @@ class QAddition(QTemplate):
             if self.forward_1:
                 out = torch.round((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
                 # out = torch.floor((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
+                # out = x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
+                #       x2 * self.mul_rhs / (2 ** self.shift_rhs)
             else:
-                out = torch.round(x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
-                        x2 * self.mul_rhs / (2 ** self.shift_rhs))
-
-                out = torch.round(x1 * self.mul_lhs / (2 ** self.shift_lhs)) + \
-                      torch.round(x2 * self.mul_rhs / (2 ** self.shift_rhs))
+                # out = torch.round(x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
+                #         x2 * self.mul_rhs / (2 ** self.shift_rhs))
+                #
+                # out = torch.round(x1 * self.mul_lhs / (2 ** self.shift_lhs)) + \
+                #       torch.round(x2 * self.mul_rhs / (2 ** self.shift_rhs))
             # out = torch.round((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
-            # out = x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
-            #     x2 * self.mul_rhs / (2 ** self.shift_rhs)
+                out = x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
+                    x2 * self.mul_rhs / (2 ** self.shift_rhs)
             # if self.saturated:
             #     out[out > (2 ** (self.bit_width - 1) - 1)] = 2**(self.bit_width - 1) - 1
             #     out[out < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)

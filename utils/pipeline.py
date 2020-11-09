@@ -207,22 +207,16 @@ def post_processing(model, pth_path, info_path, bit_width):
             scaling = q_info[m.name]
             mat_params = dict()
 
-            # mul_lhs, s_lhs = mul_shift_calculator(scaling[0], 1./scaling[2], 1.)
-            # mul_rhs, s_rhs = mul_shift_calculator(scaling[1], 1./scaling[2], 1.)
             mul_lhs, mul_rhs, s_lr = scaling_align_calculator(scaling[2]/scaling[0], scaling[2]/scaling[1])
 
             mat_params['Name'] = m.name
             mat_params['Mul_L'] = mul_lhs
             mat_params['Mul_R'] = mul_rhs
-            # mat_params['Shift_L'] = s_lhs
-            # mat_params['Shift_R'] = s_rhs
             mat_params['Shift_L'] = s_lr
             mat_params['Shift_R'] = s_lr
 
             m.mul_lhs.data = torch.tensor(mul_lhs)
             m.mul_rhs.data = torch.tensor(mul_rhs)
-            # m.shift_lhs.data = torch.tensor(s_lhs)
-            # m.shift_rhs.data = torch.tensor(s_rhs)
 
             m.shift_lhs.data = torch.tensor(s_lr)
             m.shift_rhs.data = torch.tensor(s_lr)
