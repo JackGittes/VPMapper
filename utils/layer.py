@@ -90,119 +90,7 @@ class QTemplate(nn.Module):
         self.q_inference_with_output = False
 
 
-class QConv2dv1(nn.Module):
-    def __init__(self, conv, bit_width, sx=1.0, sw=1.0, mul=1.0, shift=0.0):
-        super(QConv2d, self).__init__()
-        assert isinstance(conv, nn.Conv2d)
-        self.bit_width = bit_width
-
-        self.stride = conv.stride
-        self.padding = conv.padding
-
-        self.groups = conv.groups
-        self.weight = nn.Parameter(conv.weight)
-
-        if conv.bias is not None and torch.numel(conv.bias) > 0:
-            self.bias = nn.Parameter(conv.bias)
-        else:
-            self.bias = None
-
-        self.w_quantizer = QuantizeLayer(bit_width, torch.tensor(sw))
-        self.x_quantizer = QuantizeLayer(bit_width, torch.tensor(sx))
-
-        self.mul = nn.Parameter(torch.tensor(mul))
-        self.shift = nn.Parameter(torch.tensor(shift))
-
-        self.q_inference = True  # Only for quantization simulation.
-        self.q_inference_with_output = False  # With multiplier and shift.
-
-        # Flag, do not change.
-        self.quantized = False
-        self.reset_quantization()
-
-        self.saturated = True
-
-    def forward(self, x):
-        assert not (self.q_inference and self.q_inference_with_output), "Ambiguous " \
-                                                                 "configuration."
-        if self.q_inference:
-            self.w_quantizer.true_quantize = False
-            self.x_quantizer.true_quantize = False
-            q_weight = self.w_quantizer(self.weight)
-            q_x = self.x_quantizer(x)
-            tmp_bias = self.bias
-
-        elif self.q_inference_with_output:
-            self.w_quantizer.true_quantize = True
-            q_weight = self.w_quantizer(self.weight)
-            q_x = x
-            tmp_bias = pure_quantize(self.bias,
-                                     self.w_quantizer.s * self.x_quantizer.s,
-                                     self.bit_width * 2)
-
-        else:  # No quantization, no simulation.
-            q_weight = self.weight
-            q_x = x
-            tmp_bias = self.bias
-
-        conv_res = func.conv2d(q_x, q_weight, bias=tmp_bias,
-                               stride=self.stride,
-                               padding=self.padding,
-                               groups=self.groups)
-        if self.q_inference_with_output:
-            if self.saturated:
-                tmp_res = torch.floor(conv_res * self.mul / (2 ** self.shift))
-                tmp_res[tmp_res > (2**(self.bit_width - 1)-1)] = 2**(self.bit_width - 1)-1
-                tmp_res[tmp_res < -2 ** (self.bit_width - 1)] = -2 ** (self.bit_width - 1)
-            else:
-                tmp_res = conv_res
-            return tmp_res
-        else:
-            return conv_res
-
-    def use_full_quantization(self):
-        self.q_inference_with_output = True
-        self.q_inference = False
-
-    def use_quantization_simulation(self):
-        self.q_inference_with_output = False
-        self.q_inference = True
-
-    def reset_quantization(self):
-        self.q_inference = False
-        self.q_inference_with_output = False
-
-
 class QConv2d(QTemplate):
-    """
-    The q_inference and q_inference_with_output properties are utilized as
-    indicators to change the forward behavior of QConv2d.
-
-    Although two indicators combine to produce four states (2x2=4), we merely
-    allow three of these states as below:
-
-    (1) q_inference = True / q_inference_with_output = False
-        In this state, the integer quantization simulation is adopted, which means
-        we first quantize weights and input using QuantizeLayer, then
-        de-quantize them with same scaling factors.
-
-        We use this state in optimization stage to find the optimal quantization
-        parameters.
-
-    (2) q_inference = False / q_inference_with_output = True
-        In this state, the full integer inference is turned on, where we quantize
-        weight, input, and bias, with corresponding scaling factors. We DO NOT
-        de-quantize them such that the output is also quantized. The multiplier
-        and shift are used to re-scale the output to a small numeric range.
-
-        More details can be found in the 8-bit quantization paper:
-
-    (3) q_inference = False / q_inference_with_output = False
-        In this state, the true floating-point inference is active.
-
-    (4) q_inference = True / q_inference_with_output = True
-        Meaningless and NOT ALLOWED.
-    """
     def __init__(self, conv, bit_width, sx=1.0, sw=1.0, mul=1.0, shift=0.0):
         super(QConv2d, self).__init__()
         assert isinstance(conv, nn.Conv2d)
@@ -307,6 +195,9 @@ class QAddition(QTemplate):
     First, we collect the input lhs and rhs (i.e. x1, x2) to get the proper scaling
     factors. After that, we re-scale the output based on the cascaded layer's input
     scaling factor.
+
+    NOTE: Carefully configure the addition round mode. Different round modes have
+    significant impacts on inference accuracy.
     """
     def __init__(self, bit_width):
         super(QAddition, self).__init__()
@@ -335,6 +226,7 @@ class QAddition(QTemplate):
             #     torch.floor(x2 * self.mul_rhs / (2 ** self.shift_rhs))
             if self.forward_1:
                 out = torch.round((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
+                # out = torch.floor((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
             else:
                 out = torch.round(x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
                         x2 * self.mul_rhs / (2 ** self.shift_rhs))
@@ -353,6 +245,10 @@ class QAddition(QTemplate):
 
 
 class Reshape(nn.Module):
+    """
+    Reshape layer is utilized in converting nn.Linear to nn.Conv2d as the input shape of the
+    feature map are not consistent between nn.Linear and nn.Conv2d.
+    """
     def __init__(self, shape):
         super(Reshape, self).__init__()
         self.shape = shape
@@ -393,6 +289,12 @@ def search_replace_convolution2d(model, bit_width):
 
 
 def search_turn_off_relu6(model):
+    """
+    We replace all relu layers with relu layers since it is unnecessary to
+    saturate the output feature map to [0, 6] in a quantized network.
+    :param model: network
+    :return: None
+    """
     for child_name, child in model.named_children():
         if isinstance(child, nn.ReLU6):
             setattr(model, child_name, nn.ReLU())

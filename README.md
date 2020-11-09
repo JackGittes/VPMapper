@@ -37,3 +37,17 @@ networks have been proven to be strong enough.
 
 Hence, we support the network structure like MobileNet v1/v2. Other structures may
 be 
+
+
+### 2. Project Progress
+
+| **Operator** |  **Status**  |
+|:  ----  :|:  ----  :|
+|  Conv2d  |     √    |
+|  DWConv2d  |     √    |
+|  PWConv2d  |     √    |
+|  Linear  |     √    |
+|  Pooing  |     √    |
+|   Add    |     √    |
+
+**TODO:** 
