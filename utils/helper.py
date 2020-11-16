@@ -1,4 +1,20 @@
+import time
 import torch
+import numpy as np
+
+
+def file_id():
+    """
+    Generate a log folder for saving training checkpoint,
+    if log_root is provided, the folder is created in log_root with
+    log_time_random number as its name.
+
+    :return: None
+    """
+    time_stamp = time.strftime("%Y-%m-%dd-%Hh-%Mm-%Ss", time.localtime())
+
+    random_id = np.random.randint(0, 99999)
+    return time_stamp+"_"+"{:<05d}".format(random_id)
 
 
 def check_tuple(_in)->(int, int):
@@ -33,10 +49,10 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def accuracy(output, target, topk=(1,)):
+def accuracy(output, target, top_k=(1,)):
     """Computes the precision@k for the specified values of k"""
     with torch.no_grad():
-        max_k = max(topk)
+        max_k = max(top_k)
         batch_size = target.size(0)
 
         _, pred = output.topk(max_k, 1, True, True)
@@ -44,7 +60,9 @@ def accuracy(output, target, topk=(1,)):
         correct = pred.eq(target.view(1, -1).expand_as(pred))
 
         res = []
-        for k in topk:
+        for k in top_k:
             correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
             res.append(correct_k.mul_(100.0 / batch_size))
         return res
+
+

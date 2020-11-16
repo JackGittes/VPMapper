@@ -103,7 +103,7 @@ class QTemplate(nn.Module):
 
         # Flag, do not change.
         self.quantized = False
-        self.reset_quantization()
+        self.reset_quantization()  # Automatically invoked on initialization.
 
         self.saturated = True
         self.round = self._Rounding[0]  # default rounding mode: Round.
@@ -274,7 +274,8 @@ class QAddition(QTemplate):
                 #
                 # out = torch.round(x1 * self.mul_lhs / (2 ** self.shift_lhs)) + \
                 #       torch.round(x2 * self.mul_rhs / (2 ** self.shift_rhs))
-            # out = torch.round((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
+                # out = torch.round((x1 * self.mul_lhs + x2 * self.mul_rhs) / 2 ** self.shift_lhs)
+
                 out = x1 * self.mul_lhs / (2 ** self.shift_lhs) + \
                     x2 * self.mul_rhs / (2 ** self.shift_rhs)
             # if self.saturated:

@@ -25,6 +25,10 @@ multiplier, we can do this operation with 16-bit x 16-bit multiplication and sto
 the results to a 32-bit register without bothering to have a 64-bit register.
 
 
+Concisely, the data flow in DREMI vision chip is practically based on linear symmetric 
+quantization method @int8. 
+
+
 ![Data flow in DREMI vision chip](doc/pic/dataflow.png)
 
 

@@ -1,3 +1,4 @@
+import os
 import time
 import torch
 import torch.nn as nn
@@ -8,7 +9,21 @@ from .optimizer import mse_minimize_quantize, naive_scaling_quantize
 
 
 class Quantize(object):
-    def __init__(self, bit_width, loader=None, per_layer=True, q_method='MSE', use_gpu=False):
+    """
+    The Quantize class provides main quantization pipeline.
+    Currently, layer-wise quantization is implemented.
+
+    There are several properties defined here:
+    (1) bit_width: the bit-width of the feature map
+    (2) per_layer: the quantization scaling factors are imposed on layer-wise.
+        In the future, we will include channel-wise quantization.
+    (3) q_method: quantization algorithm used in quantization pipeline.
+
+    """
+    def __init__(self, bit_width, loader=None,
+                 per_layer=True, q_method='MSE',
+                 use_gpu=False, report_path=None,
+                 pth_save_path=None):
         assert bit_width in [8, 4], "bit width should be 8 or 4."
         assert isinstance(per_layer, bool), "per_layer should be a boolean."
         assert q_method in ['MSE', 'Naive', 'Heuristic']
@@ -22,6 +37,14 @@ class Quantize(object):
 
         self.loader = loader
         self.use_gpu = use_gpu
+
+        if os.path.isdir(report_path):
+            self.report_path = report_path
+        else:
+            print("There is ")
+
+        self.report_path = report_path
+        self.pth_path = pth_save_path
 
     @torch.no_grad()
     def apply(self, model):
