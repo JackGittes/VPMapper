@@ -38,10 +38,11 @@ class Quantize(object):
         self.loader = loader
         self.use_gpu = use_gpu
 
-        if os.path.isdir(report_path):
-            self.report_path = report_path
-        else:
-            print("There is ")
+        # TODO: complete path check
+        # if os.path.isdir(report_path):
+        #     self.report_path = report_path
+        # else:
+        #     print("There is ")
 
         self.report_path = report_path
         self.pth_path = pth_save_path

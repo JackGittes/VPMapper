@@ -49,7 +49,7 @@ class Simulation(object):
         print("=============================================================")
 
 
-def hint()->str:
+def hint() -> str:
     info = "%{ \n" \
            "\t-------- THIS IS AN AUTO-GENERATED NETWORK TEMPLATE --------\n" \
            "\tNOTE: There is no guarantee for correctness. To start a \n" \
@@ -62,28 +62,28 @@ def hint()->str:
     return info
 
 
-def author_info(author_name)->str:
+def author_info(author_name) -> str:
     info = "% Author: {}\n".format(author_name)
     return info
 
 
-def time_stamp()->str:
+def time_stamp() -> str:
     from datetime import datetime
     info = "% Date: " + datetime.today().strftime('%Y-%m-%d') + "\n"
     return info
 
 
-def main_func_def()->str:
+def main_func_def() -> str:
     res = "\nfunction [im, stat] = template(nn, net, im)\n"
     return res
 
 
-def aux_func_def(bit_width)->str:
-    max_v_b = 2 ** (bit_width-1) - 1
+def aux_func_def(bit_width) -> str:
+    max_v_b = 2 ** (bit_width - 1) - 1
     min_v_b = - 2 ** (bit_width - 1)
 
-    max_v_bb = 2 ** (2*bit_width-1) - 1
-    min_v_bb = - 2 ** (2*bit_width - 1)
+    max_v_bb = 2 ** (2 * bit_width - 1) - 1
+    min_v_bb = - 2 ** (2 * bit_width - 1)
     res = "\nfunction res = cast_int(im, mul, sft) \n" \
           "%------ Uncomment to use intermediate results cast.------\n" \
           "%\tim(im < {}) = {};\n" \
@@ -99,7 +99,7 @@ def aux_func_def(bit_width)->str:
     return res
 
 
-def arithmetic(mac_width)->str:
+def arithmetic(mac_width) -> str:
     res = "\tf = fimath('CastBeforeSum',0, 'OverflowMode', 'Saturate', 'RoundMode', 'floor', ... \n\t" \
           "'ProductMode', 'SpecifyPrecision', 'SumMode', 'SpecifyPrecision', 'ProductWordLength', {}, " \
           "... \n\t 'ProductFractionLength', 0, 'SumWordLength', {}, 'SumFractionLength', 0); \n\t" \
@@ -109,7 +109,7 @@ def arithmetic(mac_width)->str:
     return res
 
 
-def input_normalize()->str:
+def input_normalize() -> str:
     res = "\n% --- WARNING: Input is adjusted to [-128, 127].\n" \
           "% --- If your pre-processing is not like this,\n" \
           "% --- change it to what you used.\n" \
@@ -117,7 +117,7 @@ def input_normalize()->str:
     return res
 
 
-def conv2d(weight_name, stride, padding, im_name='im')->str:
+def conv2d(weight_name, stride, padding, im_name='im') -> str:
     assert padding in ['same', 'valid']
     _stride = "[{}, {}]".format(str(stride[0]), str(stride[1]))
     padding = ["'SAME'", "'VALID'"][padding == 'valid']
@@ -127,7 +127,7 @@ def conv2d(weight_name, stride, padding, im_name='im')->str:
                                                           padding)
 
 
-def depth_wise_conv(weight_name, stride, padding)->str:
+def depth_wise_conv(weight_name, stride, padding) -> str:
     """
     Generator for DepthwiseConv2d in FAST-CNN.
     Prototype: DepthwiseConv2d(im,ker,t,f,stride,padding_method)
@@ -141,7 +141,7 @@ def depth_wise_conv(weight_name, stride, padding)->str:
                                                                    padding)
 
 
-def point_wise_conv(weight_name)->str:
+def point_wise_conv(weight_name) -> str:
     """
     Generator for PointwiseConv2d in FAST-CNN.
     Prototype: PointwiseConv2d(im,ker,t,f)
@@ -150,7 +150,7 @@ def point_wise_conv(weight_name)->str:
     return "im = nn.PointwiseConv2d(im, {}, t, f);".format(weight_name)
 
 
-def pool2d(k_size, stride, p_type, padding)->str:
+def pool2d(k_size, stride, p_type, padding) -> str:
     _k_size = '[{}, {}]'.format(str(k_size[0]), str(k_size[1]))
     _stride = '[{}, {}]'.format(str(stride[0]), str(stride[1]))
     _type = ["'MAX'", "'AVG'"][p_type != 'MaxPool2d']
@@ -176,15 +176,15 @@ def zero_pad2d(padding):
                                                          padding[1])
 
 
-def add_bias(bias_name)->str:
+def add_bias(bias_name) -> str:
     return "im = nn.AddBias(im, {}, t, f);".format(bias_name)
 
 
-def add(m1, s1, m2, s2)->str:
+def add(m1, s1, m2, s2) -> str:
     return "im = nn.Add(im, im, {}, {}, {}, {});".format(m1, s1, m2, s2)
 
 
-def relu(im_name='im')->str:
+def relu(im_name='im') -> str:
     """
     Generator for ReLU in FAST-CNN.
     Prototype: im = ReLU(im)
@@ -194,7 +194,7 @@ def relu(im_name='im')->str:
     return "im = nn.ReLU({});".format(im_name)
 
 
-def generate(model, pre_code, cnt)->None:
+def generate(model, pre_code, cnt) -> None:
     """
     Generate matlab simulation code recursively.
     As the string object is immutable in Python, we use List to wrap the
