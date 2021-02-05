@@ -47,8 +47,7 @@ massive branches and shortcuts is difficult. However, from a practical perspecti
 we do not have to implement all these structures since some conventional effective
 networks have been proven to be strong enough. 
 
-Hence, we support the network structure like MobileNet v1/v2. Other structures may
-be 
+Hence, we support the network structure like MobileNet v1/v2. 
 
 
 ### 2. Project Progress
